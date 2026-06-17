@@ -1,0 +1,141 @@
+# Automated ECG Classification — Bachelor Thesis
+**Youssef Bassem Doas Rizk Tawadros**  
+German University in Cairo · June 2026  
+Supervisor: Assoc. Prof. Wael Zakaria
+
+---
+
+## Overview
+
+This repository contains two scripts from a 3-lead ECG classification pipeline trained on the **Shaoxing University Hospital dataset**. The system classifies each heartbeat as **Normal** or **Abnormal** using a hybrid 162-dimensional feature vector fed into an XGBoost classifier with SHAP explainability.
+
+**Selected leads:** Lead I · Lead III · aVL  
+**Feature breakdown:** 96 autoencoder latent + 45 morphological + 21 frequency-domain = **162 total**
+
+---
+
+## Files
+
+### 1. `ablation_l1_regularization.py`
+
+**What it does:**  
+This is the **training script** and the core of the project. It runs a full end-to-end ablation study testing the effect of L1 regularization (`reg_alpha = 0.1`) on XGBoost. It loads precomputed per-lead autoencoder latent features, extracts morphological and frequency features from raw beat segments, applies SMOTE oversampling, runs a 50-trial Optuna Bayesian hyperparameter search, trains the final XGBoost classifier, and evaluates it against the 3-channel baseline.
+
+**What it produces (saved to `inference_artifacts/`):**
+| File | Description |
+|------|-------------|
+| `clf_xgboost.joblib` | Trained XGBoost classifier |
+| `shap_explainer.joblib` | SHAP TreeExplainer for real-time use |
+| `inference_config.json` | Threshold, lead indices, feature dimensions |
+| `feature_stats.json` | Training set mean/std per feature |
+| `feature_names.json` | Plain-English name for all 162 features |
+| `shap_values_test.npy` | SHAP values on 1,000-sample test subset |
+| `shap_base_value.json` | SHAP base (expected) value |
+| `shap_global_bar.png` | Global feature importance bar chart |
+| `shap_global_beeswarm.png` | SHAP beeswarm direction/magnitude plot |
+
+**Pipeline steps:**
+1. Load precomputed latent features (`saved_features_lead{0,2,4}.npy`) → (N, 96)
+2. Load or extract raw beat segments → (N, 3, 234)
+3. Extract morphological features (15 per lead × 3) → (N, 45)
+4. Extract frequency features (7 per lead × 3) → (N, 21)
+5. Concatenate → (N, 162), split 60/20/20, apply SMOTE on train only
+6. Optuna 50-trial TPE search → retrain on full train set
+7. Evaluate, save all artifacts, run SHAP
+
+---
+
+### 2. `real_time_model.py`
+
+**What it does:**  
+This is the **inference script**. It loads the saved model and artifacts produced by `ablation_l1_regularization.py`, picks a single ECG record from the Shaoxing dataset, segments it into beats, assembles the same 162-feature vector for each beat, classifies each beat individually, and prints a plain-English SHAP-driven explanation per beat along with a majority-vote record-level prediction.
+
+**Pipeline steps:**
+1. Load `clf_xgboost.joblib` and `inference_config.json`
+2. Build (or load cached) beat index across the full dataset → `shaoxing_beat_index.npy`
+3. Load the first record from the labels CSV
+4. Preprocess and segment the 3 leads
+5. Slice latent features from `saved_features_lead{0,2,4}.npy` using the beat offset
+6. Compute morphological + frequency features fresh from the raw signal
+7. Classify each beat with probability threshold + generate SHAP explanation
+8. Print per-beat results and a majority-vote summary
+
+---
+
+## ⚠️ Can These Files Run Alone?
+
+**No — neither file can run standalone.** Both depend on external data and precomputed files that are not included in this repository.
+
+### `ablation_l1_regularization.py` needs:
+
+| Required File | What It Is | Where It Comes From |
+|---|---|---|
+| `saved_features_lead0.npy` | 32-dim autoencoder latent features for Lead I | Output of a separate autoencoder training script |
+| `saved_features_lead2.npy` | 32-dim latent features for Lead III | Same autoencoder script |
+| `saved_features_lead4.npy` | 32-dim latent features for aVL | Same autoencoder script |
+| `saved_labels_lead{0,2,4}.npy` | Beat-level labels (0=Normal, 1=Abnormal) | Same autoencoder script |
+| `WFDB_ShaoxingUniv/` | Raw 12-lead ECG records in WFDB format | [Shaoxing dataset on PhysioNet](https://physionet.org/content/ecg-arrhythmia/1.0.0/) |
+| `Master_Labels_All.csv` | Per-record diagnostic labels CSV | Shaoxing dataset / your own preprocessing |
+
+The raw WFDB records are only needed on the **first run** — after that, beat segments are cached to `cached_3ch_segments.npy` and `cached_3ch_labels.npy` and reused automatically.
+
+### `real_time_model.py` needs:
+
+Everything `ablation_l1_regularization.py` needs, **plus** all the artifacts it produces:
+
+| Required File | What It Is | Where It Comes From |
+|---|---|---|
+| `inference_artifacts/clf_xgboost.joblib` | Trained model | Run `ablation_l1_regularization.py` first |
+| `inference_artifacts/inference_config.json` | Threshold + config | Same |
+| `inference_artifacts/feature_names.json` | Feature name map | Same |
+| `saved_features_lead{0,2,4}.npy` | Latent features (all beats) | Autoencoder script |
+| `WFDB_ShaoxingUniv/` | Raw ECG records | Shaoxing dataset |
+| `Master_Labels_All.csv` | Labels CSV | Shaoxing dataset |
+| `shaoxing_beat_index.npy` | Beat offset index | Built automatically on first run |
+
+**Correct execution order:**
+```
+1. Run autoencoder training script  →  produces saved_features_lead*.npy
+2. Run ablation_l1_regularization.py  →  produces inference_artifacts/
+3. Run real_time_model.py  →  classifies beats and prints SHAP explanations
+```
+
+---
+
+## Dependencies
+
+```bash
+pip install numpy scipy scikit-learn xgboost imbalanced-learn \
+            optuna shap joblib tqdm pandas matplotlib wfdb
+```
+
+| Package | Purpose |
+|---|---|
+| `wfdb` | Reading Shaoxing WFDB-format ECG records |
+| `xgboost` | Gradient-boosted classifier |
+| `imbalanced-learn` | SMOTE oversampling |
+| `optuna` | Bayesian hyperparameter search (TPE) |
+| `shap` | TreeExplainer — per-beat feature attribution |
+| `scipy` | Bandpass filtering, R-peak detection, spectral analysis |
+| `joblib` | Model serialization and parallel processing |
+
+---
+
+## Configuration
+
+Before running, update the hardcoded paths at the top of each file to match your local setup:
+
+```python
+# In both files — change these to your actual paths
+RECORDS_PATH = r"path/to/WFDB_ShaoxingUniv"
+LABELS_PATH  = r"path/to/Master_Labels_All.csv"
+FEATURE_DIR  = r"path/to/your/feature/directory"
+```
+
+---
+
+## Dataset
+
+**Shaoxing University Hospital 12-Lead ECG Database**  
+Zhang, J. et al. (2020). *A 12-lead electrocardiogram database for arrhythmia research covering more than 10,000 patients.* Physiological Measurement.  
+Available at: https://physionet.org/content/ecg-arrhythmia/1.0.0/
