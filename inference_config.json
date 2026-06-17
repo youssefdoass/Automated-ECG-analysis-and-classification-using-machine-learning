@@ -1,0 +1,19 @@
+{
+  "optimal_threshold": 0.3292953372001648,
+  "seg_before": 90,
+  "seg_after": 144,
+  "random_state": 42,
+  "feature_dim": 162,
+  "n_latent_per_lead": 32,
+  "lead_indices": [
+    0,
+    2,
+    4
+  ],
+  "lead_names": [
+    "Lead I",
+    "Lead III",
+    "aVL"
+  ],
+  "fs": 500
+}
